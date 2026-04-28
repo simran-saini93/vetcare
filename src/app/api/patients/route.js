@@ -2,22 +2,38 @@ import { auth } from '@clerk/nextjs/server'
 import { NextResponse } from 'next/server'
 import { db } from '@/db'
 import { patients, patientOwners, owners } from '@/db/schema'
-import { desc, eq, sql, like, or } from 'drizzle-orm'
+import { desc, eq, sql, like, or, and } from 'drizzle-orm'
 import { randomUUID } from 'crypto'
 
-export async function GET() {
+export async function GET(req) {
   try {
     const { userId } = await auth()
     if (!userId) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
     const { searchParams } = new URL(req.url)
-    const search = searchParams.get('search') || ''
-    const limit  = parseInt(searchParams.get('limit') || '100')
-    const offset = parseInt(searchParams.get('offset') || '0')
+    const search  = searchParams.get('search')  || ''
+    const species = searchParams.get('species') || ''
+    const status  = searchParams.get('status')  || ''
+    const limit   = Math.min(parseInt(searchParams.get('limit')  || '50'), 100)
+    const offset  = parseInt(searchParams.get('offset') || '0')
 
-    // Single JOIN query instead of N+1
-    const rows = await db
-      .select({
+    // Build where conditions
+    const conditions = []
+    if (search) {
+      conditions.push(or(
+        like(patients.name,           `%${search}%`),
+        like(patients.microchipNumber, `%${search}%`),
+        like(patients.breed,           `%${search}%`),
+      ))
+    }
+    if (species) conditions.push(eq(patients.species, species))
+    if (status)  conditions.push(eq(patients.isActive, status === 'active'))
+
+    const where = conditions.length > 0 ? and(...conditions) : undefined
+
+    // Single JOIN — one query for all data
+    const [rows, [{ total }]] = await Promise.all([
+      db.select({
         id:                patients.id,
         name:              patients.name,
         species:           patients.species,
@@ -36,17 +52,23 @@ export async function GET() {
         isStreetAnimal:    patients.isStreetAnimal,
         primaryPhotoUrl:   patients.primaryPhotoUrl,
         createdAt:         patients.createdAt,
-        ownerName: sql`CONCAT(${owners.firstName}, ' ', ${owners.lastName})`,
-        ownerPhone: owners.phone,
+        ownerName:         sql`TRIM(CONCAT(COALESCE(${owners.firstName},''), ' ', COALESCE(${owners.lastName},'')))`,
+        ownerPhone:        owners.phone,
       })
       .from(patients)
       .leftJoin(patientOwners, eq(patientOwners.patientId, patients.id))
       .leftJoin(owners, eq(owners.id, patientOwners.ownerId))
+      .where(where)
       .orderBy(desc(patients.createdAt))
       .limit(limit)
-      .offset(offset)
+      .offset(offset),
 
-    return NextResponse.json(rows)
+      db.select({ total: sql`COUNT(*)`.mapWith(Number) })
+        .from(patients)
+        .where(where),
+    ])
+
+    return NextResponse.json({ data: rows, total, limit, offset })
   } catch (err) {
     console.error('[GET /api/patients]', err)
     return NextResponse.json({ error: 'Failed to fetch patients' }, { status: 500 })

@@ -20,7 +20,20 @@ const makeApi = (base) => ({
   delete:  (id)         => request(`/api/${base}/${id}`, { method: 'DELETE' }),
 })
 
-export const patientsApi      = makeApi('patients')
+// Patients API with pagination + search
+export const patientsApi = {
+  ...makeApi('patients'),
+  getPaginated: ({ page = 1, limit = 50, search = '', species = '', status = '' } = {}) => {
+    const offset = (page - 1) * limit
+    const params = new URLSearchParams({ limit, offset, search, species, status })
+    return request(`/api/patients?${params}`)
+  },
+  getById: (id) => request(`/api/patients/${id}`),
+  create:  (data) => request('/api/patients', { method: 'POST', body: JSON.stringify(data) }),
+  update:  (id, data) => request(`/api/patients/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
+  delete:  (id) => request(`/api/patients/${id}`, { method: 'DELETE' }),
+}
+
 export const ownersApi        = makeApi('owners')
 export const appointmentsApi  = makeApi('appointments')
 export const visitRecordsApi  = makeApi('visit-records')
